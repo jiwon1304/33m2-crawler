@@ -11,7 +11,6 @@ from string_utilities import *
 f = open(".kakaokey", 'r')
 KAKAO_REST_API_KEY = f.read()
 
-# KAKAO_REST_API_KEY = "f9fb3763d28b2e0008ae6dad70e8d815"
 SAM_URL_PREFIX = "https://33m2.co.kr/room/detail/"
 ROOM_CONTRACT_DATA_LIST = ['임대료', '장기계약 할인', '관리비용', '청소비용', '계약 수수료']
 
@@ -143,7 +142,8 @@ class Room:
         self.address = None
         self.prices = None
         self.room_name = None
-        self.room_size_pyeong = None
+        self.room_size_pyeong_sam = None
+        self.room_size_pyeong_naver = None
         self.room_type = None
         self.vacancy_rate = None
         self.deposit = None
@@ -153,7 +153,7 @@ class Room:
         self.updateLand()
         self.updateRentFee()
         self.updateVacancyRate()
-        self.updateLandPrice()
+        self.updateLandPrice(exact=False)
 
     def updateLand(self):
         room_url = SAM_URL_PREFIX + str(self.sam_id)
@@ -177,7 +177,7 @@ class Room:
         self.address = Address(room_intro.find('p', class_='address').text.strip() if room_intro.find('p', class_='address') else None)
 
         # 전용면적과 건물 유형 찾기
-        self.room_size_pyeong = 0
+        self.room_size_pyeong_sam = 0
         self.room_type = ""
         # 'place_detail' 클래스를 가진 ul 요소 찾기
         place_detail_ul = soup.find('ul', class_='place_detail')
@@ -193,7 +193,7 @@ class Room:
                 if span_tag and '전용 면적' in span_tag.text:
                     p_tag = li.find('p')
                     if p_tag:
-                        self.room_size_pyeong = int(p_tag.text.strip()[:-1])
+                        self.room_size_pyeong_sam = int(p_tag.text.strip()[:-1])
                         break  # 첫 번째 항목만 찾고 종료
             else:
                 print("33m2에서", self.sam_id, "의 전용 면적을 찾을 수 없습니다.")
@@ -355,7 +355,7 @@ class Room:
         # 날짜 수 추출
         self.vacancy_rate = num_vacant / num_day
 
-    def updateLandPrice(self):
+    def updateLandPrice(self, exact: bool = True):
         page_url_prefix = "https://fin.land.naver.com/complexes/"
         page_url_suffix = "?tradeTypes=B2&spaceType=평&tab=article"
         self.naver_id = None
@@ -436,19 +436,106 @@ class Room:
                     _area = re.sub(r'[^0-9]', '', _area)
 
                     # 전용면적이 같을 경우 해당 항목의 월세 찾기
-                    if _area == str(self.room_size_pyeong):
+                    if _area == str(self.room_size_pyeong_sam):
+                        self.room_size_pyeong_naver = self.room_size_pyeong_sam
                         price = item.find("span", class_="ComplexArticleItem_price__DFeIb")
                         target_price = price.text.strip() if price else None
                         target_price = target_price.split(" ~ ")[0]
-                        print(target_price)
+                        # print(target_price)
                         break
 
             if target_price:  # 찾으면 루프 종료
                 break
-        
+
         if not target_price:
-            print("네이버 부동산에서", self.naver_id, "의 전용면적", self.room_size_pyeong, "평 의 매물을 찾지 못하였습니다.")
-            return
+            print("네이버 부동산에서", self.naver_id, "의 전용면적", self.room_size_pyeong_sam, "평 의 매물을 찾지 못하였습니다.")
+            if exact:
+                return
+            else:
+                print("대신하여 전용면적", self.room_size_pyeong_sam - 1, "~", self.room_size_pyeong_sam + 1, "평의 매물을 찾습니다.")
+                # 결과 저장할 변수
+                target_price = None
+
+                # 모든 항목을 순회
+                for item in soup.find_all("li", class_="ComplexArticleItem_item__L5o7k"):
+                    summary_list = item.find_all("li", class_="ComplexArticleItem_item-summary__oHSwl")
+
+                    # "평수 (전용면적)"이 있는 요소 찾기
+                    for summary in summary_list:
+                        if "(" in summary.text and ")" in summary.text:
+                            _, _area = summary.text.split("(")
+                            _area = _area.strip(") ")
+                            # 숫자만 추출
+                            _area = re.sub(r'[^0-9]', '', _area)
+
+                            # 전용면적이 +-1 차이날 경우 해당 항목의 월세 찾기
+                            if _area == str(self.room_size_pyeong_sam-1):
+                                self.room_size_pyeong_naver = self.room_size_pyeong_sam-1
+                                price = item.find("span", class_="ComplexArticleItem_price__DFeIb")
+                                target_price = price.text.strip() if price else None
+                                target_price = target_price.split(" ~ ")[0]
+                                # print(target_price)
+                                break
+
+                            if _area == str(self.room_size_pyeong_sam+1):
+                                self.room_size_pyeong_naver = self.room_size_pyeong_sam+1
+                                price = item.find("span", class_="ComplexArticleItem_price__DFeIb")
+                                target_price = price.text.strip() if price else None
+                                target_price = target_price.split(" ~ ")[0]
+                                # print(target_price)
+                                break
+
+                    if target_price:  # 찾으면 루프 종료
+                        break
+
+                if not target_price:
+                    print("네이버 부동산에서", self.naver_id, "의 전용면적", self.room_size_pyeong_sam-1, "~", self.room_size_pyeong_sam+1, "평 의 매물을 찾지 못하였습니다.")
+                    return
+                print("대신하여", self.room_size_pyeong_naver,"평의 매물을 찾았습니다.")
+
+        else:
+            print("네이버 부동산에서", self.naver_id, "의 전용면적", self.room_size_pyeong_sam, "평 의 매물을 찾았습니다.")
+
+        # if not target_price and not exact:
+        #     print("대신하여 전용면적", self.room_size_pyeong_sam - 1, "~", self.room_size_pyeong_sam + 1, "평의 매물을 찾습니다.")
+        #     # 결과 저장할 변수
+        #     target_price = None
+
+        #     # 모든 항목을 순회
+        #     for item in soup.find_all("li", class_="ComplexArticleItem_item__L5o7k"):
+        #         summary_list = item.find_all("li", class_="ComplexArticleItem_item-summary__oHSwl")
+
+        #         # "평수 (전용면적)"이 있는 요소 찾기
+        #         for summary in summary_list:
+        #             if "(" in summary.text and ")" in summary.text:
+        #                 _, _area = summary.text.split("(")
+        #                 _area = _area.strip(") ")
+        #                 # 숫자만 추출
+        #                 _area = re.sub(r'[^0-9]', '', _area)
+
+        #                 # 전용면적이 +-1 차이날 경우 해당 항목의 월세 찾기
+        #                 if _area == str(self.room_size_pyeong_sam-1):
+        #                     self.room_size_pyeong_naver = self.room_size_pyeong_sam-1
+        #                     price = item.find("span", class_="ComplexArticleItem_price__DFeIb")
+        #                     target_price = price.text.strip() if price else None
+        #                     target_price = target_price.split(" ~ ")[0]
+        #                     # print(target_price)
+        #                     break
+
+        #                 if _area == str(self.room_size_pyeong_sam+1):
+        #                     self.room_size_pyeong_naver = self.room_size_pyeong_sam+1
+        #                     price = item.find("span", class_="ComplexArticleItem_price__DFeIb")
+        #                     target_price = price.text.strip() if price else None
+        #                     target_price = target_price.split(" ~ ")[0]
+        #                     # print(target_price)
+        #                     break
+
+        #         if target_price:  # 찾으면 루프 종료
+        #             break
+            
+        #     if not target_price:
+        #         print("네이버 부동산에서", self.naver_id, "의 전용면적", self.room_size_pyeong_sam-1, "~", self.room_size_pyeong_sam+1, "평 의 매물을 찾지 못하였습니다.")
+        #         return
         
         # target_price는 이제 '월세 1,000/80'의 형태
         target_price = target_price[2:]
@@ -456,7 +543,6 @@ class Room:
         self.deposit = int(target_prices[0].replace(',',''))
         self.monthly_rent = int(target_prices[1].replace(',',''))
 
-        
 
 r = Room('38048')
 print(r.address, r.naver_id, r.sam_id, r.deposit, r.monthly_rent, r.prices)
